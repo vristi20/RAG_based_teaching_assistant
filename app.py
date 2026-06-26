@@ -1,13 +1,12 @@
 import streamlit as st
 import os
-import requests
 import joblib
 import numpy as np
-import json
 from sklearn.metrics.pairwise import cosine_similarity
+from groq import Groq
+from sentence_transformers import SentenceTransformer
 
 # --- Configuration ---
-LLM_MODEL = "llama3"
 DB_FILENAME = "vector_database.joblib"
 
 # --- Page Config & Theme Styling ---
@@ -16,19 +15,14 @@ st.set_page_config(page_title="EduNexus AI Workspace", page_icon="🧠", layout=
 # Custom Strong-Override Nordic Slate CSS Styling
 st.markdown("""
     <style>
-    /* Force override Streamlit's native main container backdrop */
     div[data-testid="stAppViewContainer"], .stApp {
         background-color: #1a222d !important;
         color: #e2e8f0 !important;
     }
-    
-    /* Force override Streamlit's sidebar wrapper */
     div[data-testid="stSidebar"] {
         background-color: #121820 !important;
         border-right: 1px solid #2d3748 !important;
     }
-    
-    /* Smooth Metrics panel styling changes */
     div[data-testid="stMetricValue"] {
         font-size: 26px !important;
         color: #38bdf8 !important;
@@ -38,8 +32,6 @@ st.markdown("""
         color: #94a3b8 !important;
         font-size: 0.95rem !important;
     }
-    
-    /* Custom header styling with premium smooth gradient */
     .main-title {
         font-size: 2.3rem;
         font-weight: 700;
@@ -53,8 +45,6 @@ st.markdown("""
         font-size: 1.05rem;
         margin-bottom: 1.8rem;
     }
-    
-    /* Refined soft source card designs */
     .context-card {
         background-color: #242f41 !important;
         border-left: 4px solid #818cf8 !important;
@@ -74,43 +64,28 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Helper Functions Backend ---
+# --- Initialize Cloud-safe Models ---
 @st.cache_resource
 def load_vector_db():
     if os.path.exists(DB_FILENAME):
         return joblib.load(DB_FILENAME)
     return None
 
-def get_query_embedding(text):
-    try:
-        r = requests.post("http://localhost:11434/api/embed", json={
-            "model": "bge-m3",
-            "input": [text]
-        }, timeout=10)
-        response_data = r.json()
-        if "embeddings" in response_data:
-            return response_data["embeddings"][0]
-    except Exception as e:
-        st.error(f"Failed to connect to Ollama embedding service: {e}")
-    return None
+@st.cache_resource
+def load_embedding_model():
+    # Downloads and runs the encoder directly inside the cloud server container memory
+    return SentenceTransformer("BAAI/bge-m3")
 
-def stream_llm_response(prompt):
-    try:
-        r = requests.post("http://localhost:11434/api/generate", json={
-            "model": LLM_MODEL,
-            "prompt": prompt,
-            "stream": True
-        }, stream=True, timeout=60)
-        
-        for line in r.iter_lines():
-            if line:
-                chunk = json.loads(line.decode('utf-8'))
-                yield chunk.get("response", "")
-    except Exception as e:
-        yield f"\nError communicating with LLM: {e}"
+# Setup Groq Client using Streamlit Secrets Management
+if "GROQ_API_KEY" in st.secrets:
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+else:
+    st.error("Missing Groq API Key. Please configure GROQ_API_KEY in Streamlit Secrets.")
+    st.stop()
 
-# --- Data Engine Loading ---
+# Load data assets safely
 df = load_vector_db()
+embedding_model = load_embedding_model()
 
 # --- SIDEBAR (Control Panel & Metrics) ---
 with st.sidebar:
@@ -119,10 +94,10 @@ with st.sidebar:
     if df is not None:
         st.success("Knowledge Index Connected")
         st.metric(label="Indexed Text Segments", value=f"{len(df):,}")
-        st.metric(label="Retrieval Layer", value="bge-m3 Vector Embeddings")
-        st.metric(label="Synthesis Model", value=LLM_MODEL.lower())
+        st.metric(label="Retrieval Layer", value="bge-m3 Cloud Vector")
+        st.metric(label="Synthesis Model", value="Llama3 (via Groq Cloud)")
     else:
-        st.error("Database Offline")
+        st.error("Database Offline - Vector index missing from repository root.")
         st.stop()
         
     st.markdown("---")
@@ -134,28 +109,24 @@ with st.sidebar:
 st.markdown('<div class="main-title">🧠 EduNexus Knowledge Explorer</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Query, locate, and cross-reference context across your video training library effortlessly.</div>', unsafe_allow_html=True)
 
-# Streamlined Performance Tracker Grid at the Top
 m1, m2, m3 = st.columns(3)
 with m1:
-    st.info("⚡ **Memory Cache:** Pre-loaded `.joblib` lookup matrix is active.")
+    st.info("⚡ **Memory Cache:** Pre-loaded lookup matrix active.")
 with m2:
-    st.info("🎯 **Similarity Search:** Dense vector structural cosine comparisons are engaged.")
+    st.info("🎯 **Similarity Search:** Dense vector structural cosine comparisons engaged.")
 with m3:
-    st.info("🛡️ **Data Security:** Full offline local compute isolation active via Ollama.")
+    st.info("🛡️ **Cloud Infrastructure:** High-speed inference optimization running via Groq.")
 
 st.markdown("---")
 
-# Initialize Chat System
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Layout: Split Chat interface from Live Reference inspect module
 chat_column, reference_column = st.columns([1.25, 0.75], gap="large")
 
 with chat_column:
     st.subheader("💬 Workspace Chat")
     
-    # Message Box Rendering
     chat_container = st.container(height=480, border=True)
     with chat_container:
         if not st.session_state.messages:
@@ -164,7 +135,6 @@ with chat_column:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-    # Text Input Logic Box
     if user_question := st.chat_input("Ask a technical question about your courses..."):
         with chat_container:
             with st.chat_message("user"):
@@ -175,15 +145,14 @@ with chat_column:
             with st.chat_message("assistant"):
                 response_placeholder = st.empty()
                 
-                # Fetching contextual embeddings
-                question_embedding = get_query_embedding(user_question)
+                # Generate tracking vector natively in cloud container
+                question_embedding = embedding_model.encode([user_question])[0]
                 
                 if question_embedding is not None:
                     similarities = cosine_similarity(np.vstack(df['embedding'].values), [question_embedding]).flatten()
                     top_indices = similarities.argsort()[::-1][:3]
                     matched_df = df.loc[top_indices]
                     
-                    # Store matches dynamically in session state to show on the side column card views
                     st.session_state.last_context = []
                     context_text = ""
                     for idx, row in matched_df.iterrows():
@@ -194,22 +163,26 @@ with chat_column:
                             "text": row['text']
                         })
                         
-                    # Strict System Prompt Engineering Context
                     rag_prompt = f"""You are a helpful video course assistant. Answer the user's question accurately using ONLY the provided text context below.
-Do not mention raw video paths or data schema structures in your final sentences. Fix syntax clarity issues gracefully.
-
 Context:
 {context_text}
 
 User Question: {user_question}
-
 Answer:"""
                     
-                    # Process and stream generation text pipeline
+                    # Call out to the cloud inference layer
+                    completion = client.chat.completions.create(
+                        model="llama3-8b-8192",
+                        messages=[{"role": "user", "content": rag_prompt}],
+                        stream=True,
+                    )
+                    
                     full_response = ""
-                    for chunk in stream_llm_response(rag_prompt):
-                        full_response += chunk
-                        response_placeholder.markdown(full_response + " ▌")
+                    for chunk in completion:
+                        content = chunk.choices[0].delta.content
+                        if content:
+                            full_response += content
+                            response_placeholder.markdown(full_response + " ▌")
                     response_placeholder.markdown(full_response)
                     
                     st.session_state.messages.append({"role": "assistant", "content": full_response})
