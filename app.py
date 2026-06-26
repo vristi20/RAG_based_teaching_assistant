@@ -172,7 +172,7 @@ Answer:"""
                     
                     # Call out to the cloud inference layer
                     completion = client.chat.completions.create(
-                        model="llama3-8b-8192",
+                        model="llama-3.1-8b-instant",
                         messages=[{"role": "user", "content": rag_prompt}],
                         stream=True,
                     )
